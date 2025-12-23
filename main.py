@@ -1,15 +1,39 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from pymongo import MongoClient
+from datetime import date, timedelta, datetime
+from bson.objectid import ObjectId
+import bcrypt
 
-st.set_page_config("NC Operations Tracker", layout="wide")
+# =====================================================
+# CONFIG
+# =====================================================
+MONGO_URI = "mongodb+srv://chatterjeesubhodeep08:9O9DGkTgwKNHDLY2@cluster0.5epkxy5.mongodb.net/?retryWrites=true&w=majority"
+DB_NAME = "nc_ops"
 
-# ---------------- USERS ----------------
-NCs = ["Rishabh", "Subho", "Kunal"]
-MANAGEMENT = ["Akshay", "Narendra", "Vatsal"]
-ALL_USERS = NCs + MANAGEMENT
+client = MongoClient(MONGO_URI)
+db = client[DB_NAME]
 
-LEAVE_TYPES = {"CL": 15, "SL": 7, "COURSE": 7}
+users_col = db.users
+tasks_col = db.tasks
+task_logs_col = db.task_logs
+call_logs_col = db.call_logs
+meeting_logs_col = db.meeting_logs
+leave_col = db.leave_requests
+
+st.set_page_config("NC Operations System", layout="wide")
+
+# =====================================================
+# CONSTANTS
+# =====================================================
+NC_EMAILS = ["aolsm.nc@srisripublications.com"]
+MANAGEMENT_EMAILS = [
+    "aolsm.rc2@srisripublications.com",
+    "akshay@srisripublications.com",
+    "aolsm.rc1@srisripublications.com"
+]
+
+LEAVE_BALANCE = {"CL": 15, "SL": 7, "COURSE": 7}
 
 INDIAN_STATES = [
     "Andhra Pradesh","Assam","Bihar","Chhattisgarh","Delhi","Goa","Gujarat",
@@ -20,62 +44,127 @@ INDIAN_STATES = [
 
 MEETING_SCOPE = ["Pan India", "State-wise", "With DCs", "With NCs"]
 
-# ---------------- SESSION STATE ----------------
-def init_state():
-    st.session_state.setdefault("tasks", [])
-    st.session_state.setdefault("task_logs", [])
-    st.session_state.setdefault("call_logs", [])
-    st.session_state.setdefault("meeting_logs", [])
-    st.session_state.setdefault("leave_requests", [])
-    st.session_state.setdefault(
-        "leave_balance",
-        {u: LEAVE_TYPES.copy() for u in MANAGEMENT}
-    )
+today = date.today()
+editable_from = today - timedelta(days=6)
 
-init_state()
+# =====================================================
+# BOOTSTRAP USERS (FIRST TIME)
+# =====================================================
+INITIAL_USERS = [
+    ("aolsm.nc@srisripublications.com", "National Coordinator – AOL SM", "nc"),
+    ("aolsm.rc2@srisripublications.com", "Narendra Wamburkar", "management"),
+    ("akshay@srisripublications.com", "Akshay Kachchhi", "management"),
+    ("aolsm.rc1@srisripublications.com", "Vatsal Patel", "management"),
+]
 
-# ---------------- LOGIN ----------------
-st.sidebar.title("🔐 Login")
-user = st.sidebar.selectbox("User", ALL_USERS)
-is_nc = user in NCs
+for email, name, role in INITIAL_USERS:
+    if not users_col.find_one({"email": email}):
+        users_col.insert_one({
+            "email": email,
+            "name": name,
+            "role": role,
+            "password_hash": None,
+            "first_login": True,
+            "active": True,
+            "created_at": datetime.utcnow(),
+            "leave_balance": LEAVE_BALANCE.copy() if role == "management" else {}
+        })
+
+# =====================================================
+# SESSION
+# =====================================================
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+# =====================================================
+# LOGIN
+# =====================================================
+if not st.session_state.user:
+    st.title("🔐 Login")
+
+    email = st.text_input("Email")
+    user_doc = users_col.find_one({"email": email})
+
+    if user_doc:
+
+        # -------- FIRST LOGIN --------
+        if user_doc["first_login"]:
+            st.warning("First-time login. Please create your password.")
+
+            p1 = st.text_input("Create Password", type="password")
+            p2 = st.text_input("Confirm Password", type="password")
+
+            if st.button("Set Password"):
+                if not p1 or p1 != p2:
+                    st.error("Passwords invalid or do not match")
+                else:
+                    users_col.update_one(
+                        {"email": email},
+                        {"$set": {
+                            "password_hash": bcrypt.hashpw(p1.encode(), bcrypt.gensalt()),
+                            "first_login": False
+                        }}
+                    )
+                    st.success("Password created. Login again.")
+                    st.stop()
+
+        # -------- NORMAL LOGIN --------
+        else:
+            password = st.text_input("Password", type="password")
+            if st.button("Login"):
+                if bcrypt.checkpw(password.encode(), user_doc["password_hash"]):
+                    st.session_state.user = user_doc
+                    st.experimental_rerun()
+                else:
+                    st.error("Invalid password")
+
+    elif email:
+        st.error("User not registered")
+
+    st.stop()
+
+# =====================================================
+# AUTH CONTEXT
+# =====================================================
+user = st.session_state.user
+is_nc = user["role"] == "nc"
 
 menu = st.sidebar.radio(
     "Navigation",
     ["Dashboard", "Tasks", "Daily Logs", "Leave"]
 )
 
-today = date.today()
-editable_from = today - timedelta(days=6)
+st.sidebar.success(f"Logged in as {user['name']}")
 
 # =====================================================
 # DASHBOARD
 # =====================================================
 if menu == "Dashboard":
-    st.title(f"📊 Dashboard – {user}")
+    st.title("📊 Dashboard")
 
     if is_nc:
         sel_date = st.date_input("Select Date", today)
 
-        def show(title, data):
+        def show(title, col):
+            data = list(col.find({"date": sel_date}))
             if data:
                 st.subheader(title)
                 st.dataframe(pd.DataFrame(data))
 
-        show("📝 Task Logs", [l for l in st.session_state.task_logs if l["date"] == sel_date])
-        show("📞 Call Logs", [l for l in st.session_state.call_logs if l["date"] == sel_date])
-        show("🧑‍🤝‍🧑 Meeting Logs", [l for l in st.session_state.meeting_logs if l["date"] == sel_date])
+        show("📝 Task Logs", task_logs_col)
+        show("📞 Call Logs", call_logs_col)
+        show("🧑‍🤝‍🧑 Meeting Logs", meeting_logs_col)
 
     else:
-        my_logs = (
-            st.session_state.task_logs +
-            st.session_state.call_logs +
-            st.session_state.meeting_logs
+        logs = (
+            list(task_logs_col.find({"user": user["email"]})) +
+            list(call_logs_col.find({"user": user["email"]})) +
+            list(meeting_logs_col.find({"user": user["email"]}))
         )
-        my_logs = [l for l in my_logs if l["user"] == user]
-        if my_logs:
-            st.dataframe(pd.DataFrame(my_logs))
+        if logs:
+            st.dataframe(pd.DataFrame(logs))
         else:
-            st.info("No activity logged yet")
+            st.info("No logs yet")
 
 # =====================================================
 # TASKS
@@ -83,34 +172,43 @@ if menu == "Dashboard":
 elif menu == "Tasks":
     st.title("📝 Tasks")
 
-    title = st.text_input("Task Title")
-    desc = st.text_area("Task Description")
-    end_date = st.date_input("End Date")
+    title = st.text_input("Task Title *")
+    desc = st.text_area("Task Description *")
+    start = st.date_input("Start Date *")
+    end = st.date_input("End Date *")
 
-    assigned_to = st.selectbox("Assign To", MANAGEMENT) if is_nc else user
+    assigned_to = st.selectbox(
+        "Assign To *",
+        MANAGEMENT_EMAILS if is_nc else [user["email"]]
+    )
 
     if st.button("Create Task"):
-        st.session_state.tasks.append({
-            "id": len(st.session_state.tasks) + 1,
-            "title": title,
-            "description": desc,
-            "assigned_to": assigned_to,
-            "end_date": end_date
-        })
-        st.success("Task created")
+        if not all([title.strip(), desc.strip(), start, end]):
+            st.error("All fields are mandatory")
+        else:
+            tasks_col.insert_one({
+                "title": title,
+                "description": desc,
+                "start_date": start,
+                "end_date": end,
+                "assigned_to": assigned_to,
+                "created_by": user["email"],
+                "status": "To Do"
+            })
+            st.success("Task created")
 
     st.divider()
-    for t in st.session_state.tasks:
-        if t["assigned_to"] == user or is_nc:
-            with st.expander(f"#{t['id']} | {t['title']} | {t['assigned_to']}"):
+    for t in tasks_col.find():
+        if is_nc or t["assigned_to"] == user["email"]:
+            with st.expander(f"{t['title']} → {t['assigned_to']}"):
                 st.write(t["description"])
-                st.write(f"Due: {t['end_date']}")
+                st.write(f"{t['start_date']} → {t['end_date']}")
 
 # =====================================================
-# DAILY LOGS
+# DAILY LOGS (MANDATORY)
 # =====================================================
 elif menu == "Daily Logs":
-    st.title("🗓️ Daily Logs")
+    st.title("🗓️ Daily Work Log (Mandatory)")
 
     if is_nc:
         st.info("NCs can monitor only")
@@ -123,117 +221,92 @@ elif menu == "Daily Logs":
         max_value=today
     )
 
-    # Leave check
-    approved_leave = any(
-        l["user"] == user and l["date"] == log_date and l["status"] == "Approved"
-        for l in st.session_state.leave_requests
-    )
-
-    if approved_leave:
-        st.warning("On approved leave. No work done.")
-        if not any(
-            l["user"] == user and l["date"] == log_date
-            for l in st.session_state.task_logs
-        ):
-            st.session_state.task_logs.append({
+    # ---- Leave check ----
+    if leave_col.find_one({"user": user["email"], "date": log_date, "status": "Approved"}):
+        st.warning("On approved leave. Auto log applied.")
+        task_logs_col.update_one(
+            {"user": user["email"], "date": log_date},
+            {"$set": {
+                "user": user["email"],
                 "date": log_date,
-                "user": user,
-                "task": None,
+                "task_id": None,
                 "description": "No work done – On Leave"
-            })
+            }},
+            upsert=True
+        )
         st.stop()
 
-    log_type = st.radio("Log Type", ["Task Work", "Call", "Meeting"])
+    my_tasks = list(tasks_col.find({"assigned_to": user["email"]}))
+    if not my_tasks:
+        st.error("You must log activity even if no task assigned.")
+        reason = st.text_area("Reason *")
+        if st.button("Submit"):
+            if reason.strip():
+                task_logs_col.insert_one({
+                    "user": user["email"],
+                    "date": log_date,
+                    "task_id": None,
+                    "description": reason
+                })
+                st.success("Logged")
+        st.stop()
 
-    my_tasks = [t for t in st.session_state.tasks if t["assigned_to"] == user]
-    task_opts = ["None"] + [f"{t['id']} - {t['title']}" for t in my_tasks]
+    task_map = {t["title"]: t["_id"] for t in my_tasks}
+    task = st.selectbox("Task *", list(task_map.keys()))
+    desc = st.text_area("Work Done *")
 
-    if log_type == "Task Work":
-        task = st.selectbox("Task", task_opts[1:])
-        desc = st.text_area("Work Done")
-
-        if st.button("Save Task Log"):
-            st.session_state.task_logs.append({
-                "date": log_date,
-                "user": user,
-                "task": task,
-                "description": desc
-            })
-            st.success("Task work logged")
-
-    elif log_type == "Call":
-        person = st.text_input("Person Called")
-        ctype = st.selectbox("Call Type", ["SC","DC","Lead","Others"])
-        state = st.selectbox("State", INDIAN_STATES)
-        final_state = st.text_input("Specify State") if state == "Other" else state
-        desc = st.text_area("Call Description")
-        task = st.selectbox("Related Task", task_opts)
-
-        if st.button("Save Call Log"):
-            st.session_state.call_logs.append({
-                "date": log_date,
-                "user": user,
-                "person_called": person,
-                "call_type": ctype,
-                "state": final_state,
-                "description": desc,
-                "task": task
-            })
-            st.success("Call logged")
-
-    elif log_type == "Meeting":
-        scope = st.selectbox("Meeting Scope", MEETING_SCOPE)
-        mode = st.selectbox("Mode", ["Online","Offline"])
-        participants = st.text_area("Participants")
-        mom = st.text_area("MOM / Outcome")
-        task = st.selectbox("Related Task", task_opts)
-
-        if st.button("Save Meeting Log"):
-            st.session_state.meeting_logs.append({
-                "date": log_date,
-                "user": user,
-                "scope": scope,
-                "mode": mode,
-                "participants": participants,
-                "mom": mom,
-                "task": task
-            })
-            st.success("Meeting logged")
+    if st.button("Submit Task Log"):
+        if not desc.strip():
+            st.error("Description mandatory")
+        else:
+            task_logs_col.update_one(
+                {"user": user["email"], "date": log_date},
+                {"$set": {
+                    "user": user["email"],
+                    "date": log_date,
+                    "task_id": task_map[task],
+                    "description": desc
+                }},
+                upsert=True
+            )
+            st.success("Daily log saved")
 
 # =====================================================
 # LEAVE
 # =====================================================
 elif menu == "Leave":
-    st.title("🌴 Leave Management")
+    st.title("🌴 Leave")
 
     if not is_nc:
-        st.subheader("📊 Leave Balance")
-        st.json(st.session_state.leave_balance[user])
+        bal = users_col.find_one({"email": user["email"]})["leave_balance"]
+        st.json(bal)
 
-        ltype = st.selectbox("Leave Type", list(LEAVE_TYPES.keys()))
-        ldate = st.date_input("Leave Date")
-        reason = st.text_input("Reason")
+        ltype = st.selectbox("Leave Type *", list(bal.keys()))
+        ldate = st.date_input("Leave Date *")
+        reason = st.text_area("Reason *")
 
         if st.button("Apply Leave"):
-            if st.session_state.leave_balance[user][ltype] > 0:
-                st.session_state.leave_requests.append({
-                    "user": user,
+            if reason.strip():
+                leave_col.insert_one({
+                    "user": user["email"],
                     "type": ltype,
                     "date": ldate,
                     "reason": reason,
                     "status": "Pending"
                 })
                 st.success("Leave applied")
-            else:
-                st.error("No balance left")
 
     else:
-        st.subheader("✅ Leave Approvals")
-        for l in st.session_state.leave_requests:
-            if l["status"] == "Pending":
-                with st.expander(f"{l['user']} | {l['type']} | {l['date']}"):
-                    st.write(l["reason"])
-                    if st.button("Approve", key=f"{l['user']}{l['date']}"):
-                        l["status"] = "Approved"
-                        st.session_state.leave_balance[l["user"]][l["type"]] -= 1
-                        st.success("Approved")
+        for l in leave_col.find({"status": "Pending"}):
+            with st.expander(f"{l['user']} | {l['type']} | {l['date']}"):
+                st.write(l["reason"])
+                if st.button("Approve", key=str(l["_id"])):
+                    leave_col.update_one(
+                        {"_id": l["_id"]},
+                        {"$set": {"status": "Approved"}}
+                    )
+                    users_col.update_one(
+                        {"email": l["user"]},
+                        {"$inc": {f"leave_balance.{l['type']}": -1}}
+                    )
+                    st.success("Approved")
