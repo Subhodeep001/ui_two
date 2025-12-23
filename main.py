@@ -2,12 +2,14 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 
-st.set_page_config("NC Daily Work Tracker", layout="wide")
+st.set_page_config("NC Operations Tracker", layout="wide")
 
 # ---------------- USERS ----------------
 NCs = ["Rishabh", "Subho", "Kunal"]
 MANAGEMENT = ["Akshay", "Narendra", "Vatsal"]
 ALL_USERS = NCs + MANAGEMENT
+
+LEAVE_TYPES = {"CL": 15, "SL": 7, "COURSE": 7}
 
 INDIAN_STATES = [
     "Andhra Pradesh","Assam","Bihar","Chhattisgarh","Delhi","Goa","Gujarat",
@@ -16,12 +18,7 @@ INDIAN_STATES = [
     "Uttar Pradesh","Uttarakhand","West Bengal","Other"
 ]
 
-MEETING_SCOPE = [
-    "Pan India",
-    "State-wise",
-    "With DCs",
-    "With NCs"
-]
+MEETING_SCOPE = ["Pan India", "State-wise", "With DCs", "With NCs"]
 
 # ---------------- SESSION STATE ----------------
 def init_state():
@@ -29,7 +26,11 @@ def init_state():
     st.session_state.setdefault("task_logs", [])
     st.session_state.setdefault("call_logs", [])
     st.session_state.setdefault("meeting_logs", [])
-    st.session_state.setdefault("leaves", [])  # approved leaves only
+    st.session_state.setdefault("leave_requests", [])
+    st.session_state.setdefault(
+        "leave_balance",
+        {u: LEAVE_TYPES.copy() for u in MANAGEMENT}
+    )
 
 init_state()
 
@@ -40,7 +41,7 @@ is_nc = user in NCs
 
 menu = st.sidebar.radio(
     "Navigation",
-    ["Dashboard", "Tasks", "Daily Logs"]
+    ["Dashboard", "Tasks", "Daily Logs", "Leave"]
 )
 
 today = date.today()
@@ -53,39 +54,28 @@ if menu == "Dashboard":
     st.title(f"📊 Dashboard – {user}")
 
     if is_nc:
-        selected_date = st.date_input("Select Date", today)
+        sel_date = st.date_input("Select Date", today)
 
-        task_logs = [l for l in st.session_state.task_logs if l["date"] == selected_date]
-        call_logs = [l for l in st.session_state.call_logs if l["date"] == selected_date]
-        meeting_logs = [l for l in st.session_state.meeting_logs if l["date"] == selected_date]
+        def show(title, data):
+            if data:
+                st.subheader(title)
+                st.dataframe(pd.DataFrame(data))
 
-        if task_logs:
-            st.subheader("📝 Task Work")
-            st.dataframe(pd.DataFrame(task_logs))
-
-        if call_logs:
-            st.subheader("📞 Calls")
-            st.dataframe(pd.DataFrame(call_logs))
-
-        if meeting_logs:
-            st.subheader("🧑‍🤝‍🧑 Meetings")
-            st.dataframe(pd.DataFrame(meeting_logs))
-
-        if not task_logs and not call_logs and not meeting_logs:
-            st.info("No activity for this date")
+        show("📝 Task Logs", [l for l in st.session_state.task_logs if l["date"] == sel_date])
+        show("📞 Call Logs", [l for l in st.session_state.call_logs if l["date"] == sel_date])
+        show("🧑‍🤝‍🧑 Meeting Logs", [l for l in st.session_state.meeting_logs if l["date"] == sel_date])
 
     else:
-        st.subheader("📜 My Activity History")
-        logs = (
+        my_logs = (
             st.session_state.task_logs +
             st.session_state.call_logs +
             st.session_state.meeting_logs
         )
-        my_logs = [l for l in logs if l["user"] == user]
+        my_logs = [l for l in my_logs if l["user"] == user]
         if my_logs:
             st.dataframe(pd.DataFrame(my_logs))
         else:
-            st.info("No logs yet")
+            st.info("No activity logged yet")
 
 # =====================================================
 # TASKS
@@ -110,7 +100,6 @@ elif menu == "Tasks":
         st.success("Task created")
 
     st.divider()
-
     for t in st.session_state.tasks:
         if t["assigned_to"] == user or is_nc:
             with st.expander(f"#{t['id']} | {t['title']} | {t['assigned_to']}"):
@@ -118,13 +107,13 @@ elif menu == "Tasks":
                 st.write(f"Due: {t['end_date']}")
 
 # =====================================================
-# DAILY LOGS (MANAGEMENT ONLY)
+# DAILY LOGS
 # =====================================================
 elif menu == "Daily Logs":
-    st.title("🗓️ Daily Activity Log")
+    st.title("🗓️ Daily Logs")
 
     if is_nc:
-        st.info("NCs can only monitor logs")
+        st.info("NCs can monitor only")
         st.stop()
 
     log_date = st.date_input(
@@ -134,9 +123,14 @@ elif menu == "Daily Logs":
         max_value=today
     )
 
-    # Leave handling
-    if any(l["user"] == user and l["date"] == log_date for l in st.session_state.leaves):
-        st.warning("You are on leave. No work done – On Leave.")
+    # Leave check
+    approved_leave = any(
+        l["user"] == user and l["date"] == log_date and l["status"] == "Approved"
+        for l in st.session_state.leave_requests
+    )
+
+    if approved_leave:
+        st.warning("On approved leave. No work done.")
         if not any(
             l["user"] == user and l["date"] == log_date
             for l in st.session_state.task_logs
@@ -152,12 +146,11 @@ elif menu == "Daily Logs":
     log_type = st.radio("Log Type", ["Task Work", "Call", "Meeting"])
 
     my_tasks = [t for t in st.session_state.tasks if t["assigned_to"] == user]
-    task_options = ["None"] + [f"{t['id']} - {t['title']}" for t in my_tasks]
+    task_opts = ["None"] + [f"{t['id']} - {t['title']}" for t in my_tasks]
 
-    # ---------- TASK WORK ----------
     if log_type == "Task Work":
-        task = st.selectbox("Task", task_options[1:])
-        desc = st.text_area("Work Done Today")
+        task = st.selectbox("Task", task_opts[1:])
+        desc = st.text_area("Work Done")
 
         if st.button("Save Task Log"):
             st.session_state.task_logs.append({
@@ -168,34 +161,32 @@ elif menu == "Daily Logs":
             })
             st.success("Task work logged")
 
-    # ---------- CALL ----------
     elif log_type == "Call":
         person = st.text_input("Person Called")
-        call_type = st.selectbox("Call Type", ["SC", "DC", "Lead", "Others"])
+        ctype = st.selectbox("Call Type", ["SC","DC","Lead","Others"])
         state = st.selectbox("State", INDIAN_STATES)
         final_state = st.text_input("Specify State") if state == "Other" else state
         desc = st.text_area("Call Description")
-        task = st.selectbox("Related Task", task_options)
+        task = st.selectbox("Related Task", task_opts)
 
         if st.button("Save Call Log"):
             st.session_state.call_logs.append({
                 "date": log_date,
                 "user": user,
                 "person_called": person,
-                "call_type": call_type,
+                "call_type": ctype,
                 "state": final_state,
                 "description": desc,
                 "task": task
             })
             st.success("Call logged")
 
-    # ---------- MEETING ----------
     elif log_type == "Meeting":
         scope = st.selectbox("Meeting Scope", MEETING_SCOPE)
-        mode = st.selectbox("Mode", ["Online", "Offline"])
+        mode = st.selectbox("Mode", ["Online","Offline"])
         participants = st.text_area("Participants")
         mom = st.text_area("MOM / Outcome")
-        task = st.selectbox("Related Task", task_options)
+        task = st.selectbox("Related Task", task_opts)
 
         if st.button("Save Meeting Log"):
             st.session_state.meeting_logs.append({
@@ -208,3 +199,41 @@ elif menu == "Daily Logs":
                 "task": task
             })
             st.success("Meeting logged")
+
+# =====================================================
+# LEAVE
+# =====================================================
+elif menu == "Leave":
+    st.title("🌴 Leave Management")
+
+    if not is_nc:
+        st.subheader("📊 Leave Balance")
+        st.json(st.session_state.leave_balance[user])
+
+        ltype = st.selectbox("Leave Type", list(LEAVE_TYPES.keys()))
+        ldate = st.date_input("Leave Date")
+        reason = st.text_input("Reason")
+
+        if st.button("Apply Leave"):
+            if st.session_state.leave_balance[user][ltype] > 0:
+                st.session_state.leave_requests.append({
+                    "user": user,
+                    "type": ltype,
+                    "date": ldate,
+                    "reason": reason,
+                    "status": "Pending"
+                })
+                st.success("Leave applied")
+            else:
+                st.error("No balance left")
+
+    else:
+        st.subheader("✅ Leave Approvals")
+        for l in st.session_state.leave_requests:
+            if l["status"] == "Pending":
+                with st.expander(f"{l['user']} | {l['type']} | {l['date']}"):
+                    st.write(l["reason"])
+                    if st.button("Approve", key=f"{l['user']}{l['date']}"):
+                        l["status"] = "Approved"
+                        st.session_state.leave_balance[l["user"]][l["type"]] -= 1
+                        st.success("Approved")
