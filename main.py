@@ -9,11 +9,19 @@ NCs = ["Rishabh", "Subho", "Kunal"]
 MANAGEMENT = ["Akshay", "Narendra", "Vatsal"]
 ALL_USERS = NCs + MANAGEMENT
 
+INDIAN_STATES = [
+    "Andhra Pradesh","Assam","Bihar","Chhattisgarh","Delhi","Goa","Gujarat",
+    "Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala","Madhya Pradesh",
+    "Maharashtra","Odisha","Punjab","Rajasthan","Tamil Nadu","Telangana",
+    "Uttar Pradesh","Uttarakhand","West Bengal","Other"
+]
+
 # ---------------- SESSION STATE ----------------
 def init_state():
     st.session_state.setdefault("tasks", [])
     st.session_state.setdefault("work_logs", [])
     st.session_state.setdefault("call_logs", [])
+    st.session_state.setdefault("worklog_approvals", {})  # (user, month, year)
     st.session_state.setdefault(
         "leave_balance",
         {u: {"CL": 15, "SL": 7, "COURSE": 7} for u in MANAGEMENT}
@@ -28,7 +36,7 @@ is_nc = user in NCs
 
 menu = st.sidebar.radio(
     "Navigation",
-    ["Dashboard", "Tasks", "Daily Work Log", "Call Log"]
+    ["Dashboard", "Tasks", "Daily Work Log", "Call Log", "Monthly Approval"]
 )
 
 # =====================================================
@@ -36,70 +44,30 @@ menu = st.sidebar.radio(
 # =====================================================
 if menu == "Dashboard":
     st.title(f"📊 Dashboard – {user}")
-
     today = date.today()
 
     if is_nc:
-        st.subheader("📌 Task Overview")
-
-        if st.session_state.tasks:
-            df = pd.DataFrame(st.session_state.tasks)
+        df = pd.DataFrame(st.session_state.tasks)
+        if not df.empty:
             df["Overdue"] = df.apply(
                 lambda x: x["end_date"] < today and x["status"] not in ["Done", "Closed"],
                 axis=1
             )
-
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Tasks", len(df))
-            col2.metric("Completed", len(df[df["status"].isin(["Done", "Closed"])]))
+            col2.metric("Completed", len(df[df["status"].isin(["Done","Closed"])]))
             col3.metric("Spilling Tasks", len(df[df["Overdue"]]))
-
             st.dataframe(df)
-
-        st.divider()
-        st.subheader("🗓️ Day-wise Team Activity")
-
-        selected_date = st.date_input("Select Date", today)
-
-        daily_work = [
-            w for w in st.session_state.work_logs
-            if w["date"] == selected_date
-        ]
-
-        daily_calls = [
-            c for c in st.session_state.call_logs
-            if c["date"] == selected_date
-        ]
-
-        if daily_work:
-            st.markdown("### 📝 Work Updates")
-            st.dataframe(pd.DataFrame(daily_work))
-
-        if daily_calls:
-            st.markdown("### 📞 Call Logs")
-            st.dataframe(pd.DataFrame(daily_calls))
-
-        if not daily_work and not daily_calls:
-            st.info("No activity recorded for this date")
 
     else:
         my_tasks = [t for t in st.session_state.tasks if t["assigned_to"] == user]
         st.metric("My Tasks", len(my_tasks))
-        st.metric(
-            "Overdue",
-            len([
-                t for t in my_tasks
-                if t["end_date"] < today and t["status"] not in ["Done", "Closed"]
-            ])
-        )
 
 # =====================================================
 # TASKS
 # =====================================================
 elif menu == "Tasks":
     st.title("📝 Task Management")
-
-    st.subheader("➕ Create Task")
 
     title = st.text_input("Task Title")
     desc = st.text_area("Task Description")
@@ -128,61 +96,53 @@ elif menu == "Tasks":
         st.success("Task Created")
 
     st.divider()
-    st.subheader("📋 Task List")
 
     for t in st.session_state.tasks:
-        can_view = (
-            t["assigned_to"] == user or
-            (is_nc and user in t["reporters"])
-        )
-
-        if can_view:
-            with st.expander(
-                f"#{t['id']} | {t['title']} | {t['assigned_to']} | "
-                f"Due: {t['end_date']} | Status: {t['status']}"
-            ):
+        if t["assigned_to"] == user or (is_nc and user in t["reporters"]):
+            with st.expander(f"#{t['id']} | {t['title']} | {t['status']}"):
                 st.write(t["description"])
-
                 if t["assigned_to"] == user or is_nc:
                     t["status"] = st.selectbox(
-                        "Update Status",
-                        ["To Do", "Running", "Done", "Closed"],
-                        index=["To Do", "Running", "Done", "Closed"].index(t["status"]),
+                        "Status",
+                        ["To Do","Running","Done","Closed"],
+                        index=["To Do","Running","Done","Closed"].index(t["status"]),
                         key=f"s{t['id']}"
                     )
 
 # =====================================================
-# DAILY WORK LOG (ALL USERS)
+# DAILY WORK LOG
 # =====================================================
 elif menu == "Daily Work Log":
     st.title("🗓️ Daily Work Log")
 
-    my_tasks = [
-        t for t in st.session_state.tasks
-        if t["assigned_to"] == user
-    ]
+    my_tasks = [t for t in st.session_state.tasks if t["assigned_to"] == user]
 
     if not my_tasks:
         st.info("No assigned tasks")
     else:
-        task_map = {f"{t['id']} - {t['title']}": t["id"] for t in my_tasks}
-        selected_task = st.selectbox("Task", list(task_map.keys()))
-        update_type = st.selectbox(
-            "Update Type",
-            ["Call", "Meeting", "MOM", "Documentation", "Follow-up", "Other"]
-        )
-        work_desc = st.text_area("What did you do today?")
+        month_key = (user, date.today().month, date.today().year)
+        locked = st.session_state.worklog_approvals.get(month_key, False)
 
-        if st.button("Log Work"):
-            st.session_state.work_logs.append({
-                "date": date.today(),
-                "user": user,
-                "task_id": task_map[selected_task],
-                "task": selected_task,
-                "update_type": update_type,
-                "description": work_desc
-            })
-            st.success("Work logged")
+        if locked:
+            st.warning("This month is approved. Logs are locked.")
+        else:
+            task_map = {f"{t['id']} - {t['title']}": t["id"] for t in my_tasks}
+            task_sel = st.selectbox("Task", list(task_map.keys()))
+            update_type = st.selectbox(
+                "Update Type",
+                ["Call","Meeting","MOM","Documentation","Follow-up","Other"]
+            )
+            desc = st.text_area("Work Description")
+
+            if st.button("Log Work"):
+                st.session_state.work_logs.append({
+                    "date": date.today(),
+                    "user": user,
+                    "task": task_sel,
+                    "update_type": update_type,
+                    "description": desc
+                })
+                st.success("Work logged")
 
 # =====================================================
 # CALL LOG (MANAGEMENT ONLY)
@@ -191,34 +151,66 @@ elif menu == "Call Log":
     st.title("📞 Call Log")
 
     if is_nc:
-        st.info("Call logs are created by Management. Monitoring only.")
-
+        st.info("Monitoring only")
         if st.session_state.call_logs:
             st.dataframe(pd.DataFrame(st.session_state.call_logs))
         else:
-            st.info("No call logs yet")
+            st.info("No call logs")
 
     else:
-        name = st.text_input("Person Called")
-        call_type = st.selectbox("Call Type", ["SC", "DC", "Lead", "Others"])
-        call_desc = st.text_area("Call Description")
+        person = st.text_input("Person Called")
+        call_type = st.selectbox("Call Type", ["SC","DC","Lead","Others"])
+        state = st.selectbox("State", INDIAN_STATES)
+        other_state = ""
+        if state == "Other":
+            other_state = st.text_input("Specify State")
+        desc = st.text_area("Call Description")
 
-        related_task = st.selectbox(
-            "Related Task (optional)",
-            ["None"] + [
-                f"{t['id']} - {t['title']}"
-                for t in st.session_state.tasks
-                if t["assigned_to"] == user
-            ]
+        task_link = st.selectbox(
+            "Related Task",
+            ["None"] + [f"{t['id']} - {t['title']}" for t in st.session_state.tasks if t["assigned_to"] == user]
         )
 
         if st.button("Log Call"):
             st.session_state.call_logs.append({
                 "date": date.today(),
                 "user": user,
-                "person_called": name,
+                "person_called": person,
                 "call_type": call_type,
-                "description": call_desc,
-                "task": related_task
+                "state": other_state if state == "Other" else state,
+                "description": desc,
+                "task": task_link
             })
             st.success("Call logged")
+
+# =====================================================
+# MONTHLY WORK LOG APPROVAL (NC ONLY)
+# =====================================================
+elif menu == "Monthly Approval":
+    st.title("✅ Monthly Work Log Approval")
+
+    if not is_nc:
+        st.info("Only NCs can approve")
+    else:
+        sel_user = st.selectbox("Management User", MANAGEMENT)
+        sel_month = st.selectbox("Month", range(1,13))
+        sel_year = st.selectbox("Year", [date.today().year, date.today().year-1])
+
+        logs = [
+            l for l in st.session_state.work_logs
+            if l["user"] == sel_user and
+               l["date"].month == sel_month and
+               l["date"].year == sel_year
+        ]
+
+        if logs:
+            st.dataframe(pd.DataFrame(logs))
+            key = (sel_user, sel_month, sel_year)
+            if not st.session_state.worklog_approvals.get(key, False):
+                if st.button("Approve Month"):
+                    st.session_state.worklog_approvals[key] = True
+                    st.success("Month approved")
+            else:
+                st.success("Already approved")
+        else:
+            st.info("No logs for selected period")
