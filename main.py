@@ -16,13 +16,20 @@ INDIAN_STATES = [
     "Uttar Pradesh","Uttarakhand","West Bengal","Other"
 ]
 
+MEETING_SCOPE = [
+    "Pan India",
+    "State-wise",
+    "With DCs",
+    "With NCs"
+]
+
 # ---------------- SESSION STATE ----------------
 def init_state():
     st.session_state.setdefault("tasks", [])
     st.session_state.setdefault("task_logs", [])
     st.session_state.setdefault("call_logs", [])
     st.session_state.setdefault("meeting_logs", [])
-    st.session_state.setdefault("leaves", [])  # approved leaves
+    st.session_state.setdefault("leaves", [])  # approved leaves only
 
 init_state()
 
@@ -127,7 +134,7 @@ elif menu == "Daily Logs":
         max_value=today
     )
 
-    # Check leave
+    # Leave handling
     if any(l["user"] == user and l["date"] == log_date for l in st.session_state.leaves):
         st.warning("You are on leave. No work done – On Leave.")
         if not any(
@@ -166,7 +173,7 @@ elif menu == "Daily Logs":
         person = st.text_input("Person Called")
         call_type = st.selectbox("Call Type", ["SC", "DC", "Lead", "Others"])
         state = st.selectbox("State", INDIAN_STATES)
-        other_state = st.text_input("Specify State") if state == "Other" else state
+        final_state = st.text_input("Specify State") if state == "Other" else state
         desc = st.text_area("Call Description")
         task = st.selectbox("Related Task", task_options)
 
@@ -176,7 +183,7 @@ elif menu == "Daily Logs":
                 "user": user,
                 "person_called": person,
                 "call_type": call_type,
-                "state": other_state,
+                "state": final_state,
                 "description": desc,
                 "task": task
             })
@@ -184,7 +191,7 @@ elif menu == "Daily Logs":
 
     # ---------- MEETING ----------
     elif log_type == "Meeting":
-        mtype = st.selectbox("Meeting Type", ["Internal", "External"])
+        scope = st.selectbox("Meeting Scope", MEETING_SCOPE)
         mode = st.selectbox("Mode", ["Online", "Offline"])
         participants = st.text_area("Participants")
         mom = st.text_area("MOM / Outcome")
@@ -194,7 +201,7 @@ elif menu == "Daily Logs":
             st.session_state.meeting_logs.append({
                 "date": log_date,
                 "user": user,
-                "meeting_type": mtype,
+                "scope": scope,
                 "mode": mode,
                 "participants": participants,
                 "mom": mom,
