@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date
 
 st.set_page_config("NC Work Management System", layout="wide")
 
@@ -152,7 +152,7 @@ elif menu == "Tasks":
                     )
 
 # =====================================================
-# DAILY WORK LOG
+# DAILY WORK LOG (ALL USERS)
 # =====================================================
 elif menu == "Daily Work Log":
     st.title("🗓️ Daily Work Log")
@@ -185,31 +185,40 @@ elif menu == "Daily Work Log":
             st.success("Work logged")
 
 # =====================================================
-# CALL LOG
+# CALL LOG (MANAGEMENT ONLY)
 # =====================================================
 elif menu == "Call Log":
     st.title("📞 Call Log")
 
-    name = st.text_input("Person Called")
-    call_type = st.selectbox("Call Type", ["SC", "DC", "Lead", "Others"])
-    call_desc = st.text_area("Call Description")
+    if is_nc:
+        st.info("Call logs are created by Management. Monitoring only.")
 
-    related_task = st.selectbox(
-        "Related Task (optional)",
-        ["None"] + [
-            f"{t['id']} - {t['title']}"
-            for t in st.session_state.tasks
-            if t["assigned_to"] == user
-        ]
-    )
+        if st.session_state.call_logs:
+            st.dataframe(pd.DataFrame(st.session_state.call_logs))
+        else:
+            st.info("No call logs yet")
 
-    if st.button("Log Call"):
-        st.session_state.call_logs.append({
-            "date": date.today(),
-            "user": user,
-            "person_called": name,
-            "call_type": call_type,
-            "description": call_desc,
-            "task": related_task
-        })
-        st.success("Call logged")
+    else:
+        name = st.text_input("Person Called")
+        call_type = st.selectbox("Call Type", ["SC", "DC", "Lead", "Others"])
+        call_desc = st.text_area("Call Description")
+
+        related_task = st.selectbox(
+            "Related Task (optional)",
+            ["None"] + [
+                f"{t['id']} - {t['title']}"
+                for t in st.session_state.tasks
+                if t["assigned_to"] == user
+            ]
+        )
+
+        if st.button("Log Call"):
+            st.session_state.call_logs.append({
+                "date": date.today(),
+                "user": user,
+                "person_called": name,
+                "call_type": call_type,
+                "description": call_desc,
+                "task": related_task
+            })
+            st.success("Call logged")
