@@ -6,9 +6,9 @@ from bson.objectid import ObjectId
 import bcrypt
 
 # =====================================================
-# CONFIG
+# CONFIG (SECURE)
 # =====================================================
-MONGO_URI = "mongodb+srv://chatterjeesubhodeep08:9O9DGkTgwKNHDLY2@cluster0.5epkxy5.mongodb.net/?retryWrites=true&w=majority"
+MONGO_URI = st.secrets["mongo"]
 DB_NAME = "nc_ops"
 
 client = MongoClient(MONGO_URI)
@@ -26,14 +26,7 @@ st.set_page_config("NC Operations System", layout="wide")
 # =====================================================
 # CONSTANTS
 # =====================================================
-NC_EMAILS = ["aolsm.nc@srisripublications.com"]
-MANAGEMENT_EMAILS = [
-    "aolsm.rc2@srisripublications.com",
-    "akshay@srisripublications.com",
-    "aolsm.rc1@srisripublications.com"
-]
-
-LEAVE_BALANCE = {"CL": 15, "SL": 7, "COURSE": 7}
+LEAVE_TYPES = ["CL", "SL", "COURSE"]
 
 INDIAN_STATES = [
     "Andhra Pradesh","Assam","Bihar","Chhattisgarh","Delhi","Goa","Gujarat",
@@ -48,78 +41,66 @@ today = date.today()
 editable_from = today - timedelta(days=6)
 
 # =====================================================
-# BOOTSTRAP USERS (FIRST TIME)
-# =====================================================
-INITIAL_USERS = [
-    ("aolsm.nc@srisripublications.com", "National Coordinator – AOL SM", "nc"),
-    ("aolsm.rc2@srisripublications.com", "Narendra Wamburkar", "management"),
-    ("akshay@srisripublications.com", "Akshay Kachchhi", "management"),
-    ("aolsm.rc1@srisripublications.com", "Vatsal Patel", "management"),
-]
-
-for email, name, role in INITIAL_USERS:
-    if not users_col.find_one({"email": email}):
-        users_col.insert_one({
-            "email": email,
-            "name": name,
-            "role": role,
-            "password_hash": None,
-            "first_login": True,
-            "active": True,
-            "created_at": datetime.utcnow(),
-            "leave_balance": LEAVE_BALANCE.copy() if role == "management" else {}
-        })
-
-# =====================================================
 # SESSION
 # =====================================================
 if "user" not in st.session_state:
     st.session_state.user = None
 
 # =====================================================
-# LOGIN
+# LOGIN (NO BOOTSTRAP)
 # =====================================================
 if not st.session_state.user:
     st.title("🔐 Login")
 
     email = st.text_input("Email")
-    user_doc = users_col.find_one({"email": email})
+    user_doc = users_col.find_one({"email": email, "active": True})
+
+    if email and not user_doc:
+        st.error("User not registered. Contact admin.")
+        st.stop()
 
     if user_doc:
 
-        # -------- FIRST LOGIN --------
-        if user_doc["first_login"]:
-            st.warning("First-time login. Please create your password.")
+        # ---------- FIRST LOGIN ----------
+        if user_doc.get("first_login", False):
+            st.subheader("First-Time Login – Create Password")
 
             p1 = st.text_input("Create Password", type="password")
             p2 = st.text_input("Confirm Password", type="password")
 
             if st.button("Set Password"):
                 if not p1 or p1 != p2:
-                    st.error("Passwords invalid or do not match")
+                    st.error("Passwords are empty or do not match")
                 else:
                     users_col.update_one(
-                        {"email": email},
+                        {"_id": user_doc["_id"]},
                         {"$set": {
-                            "password_hash": bcrypt.hashpw(p1.encode(), bcrypt.gensalt()),
-                            "first_login": False
+                            "password_hash": bcrypt.hashpw(
+                                p1.encode(), bcrypt.gensalt()
+                            ),
+                            "first_login": False,
+                            "updated_at": datetime.utcnow()
                         }}
                     )
-                    st.success("Password created. Login again.")
+                    st.success("Password created. Please login again.")
                     st.stop()
 
-        # -------- NORMAL LOGIN --------
+        # ---------- NORMAL LOGIN ----------
         else:
             password = st.text_input("Password", type="password")
             if st.button("Login"):
-                if bcrypt.checkpw(password.encode(), user_doc["password_hash"]):
-                    st.session_state.user = user_doc
+                if bcrypt.checkpw(
+                    password.encode(),
+                    user_doc["password_hash"]
+                ):
+                    st.session_state.user = {
+                        "email": user_doc["email"],
+                        "name": user_doc["name"],
+                        "role": user_doc["role"]
+                    }
                     st.experimental_rerun()
                 else:
                     st.error("Invalid password")
-
-    elif email:
-        st.error("User not registered")
 
     st.stop()
 
@@ -129,12 +110,11 @@ if not st.session_state.user:
 user = st.session_state.user
 is_nc = user["role"] == "nc"
 
+st.sidebar.success(f"Logged in as {user['name']}")
 menu = st.sidebar.radio(
     "Navigation",
-    ["Dashboard", "Tasks", "Daily Logs", "Leave"]
+    ["Dashboard", "Tasks", "Daily Logs", "Leave", "Logout"]
 )
-
-st.sidebar.success(f"Logged in as {user['name']}")
 
 # =====================================================
 # DASHBOARD
@@ -164,7 +144,7 @@ if menu == "Dashboard":
         if logs:
             st.dataframe(pd.DataFrame(logs))
         else:
-            st.info("No logs yet")
+            st.info("No activity logged yet")
 
 # =====================================================
 # TASKS
@@ -177,13 +157,13 @@ elif menu == "Tasks":
     start = st.date_input("Start Date *")
     end = st.date_input("End Date *")
 
-    assigned_to = st.selectbox(
-        "Assign To *",
-        MANAGEMENT_EMAILS if is_nc else [user["email"]]
-    )
+    if is_nc:
+        assigned_to = st.text_input("Assign To (Email) *")
+    else:
+        assigned_to = user["email"]
 
     if st.button("Create Task"):
-        if not all([title.strip(), desc.strip(), start, end]):
+        if not all([title.strip(), desc.strip(), start, end, assigned_to.strip()]):
             st.error("All fields are mandatory")
         else:
             tasks_col.insert_one({
@@ -221,7 +201,6 @@ elif menu == "Daily Logs":
         max_value=today
     )
 
-    # ---- Leave check ----
     if leave_col.find_one({"user": user["email"], "date": log_date, "status": "Approved"}):
         st.warning("On approved leave. Auto log applied.")
         task_logs_col.update_one(
@@ -237,8 +216,9 @@ elif menu == "Daily Logs":
         st.stop()
 
     my_tasks = list(tasks_col.find({"assigned_to": user["email"]}))
+
     if not my_tasks:
-        st.error("You must log activity even if no task assigned.")
+        st.error("No tasks assigned. Reason is mandatory.")
         reason = st.text_area("Reason *")
         if st.button("Submit"):
             if reason.strip():
@@ -248,7 +228,7 @@ elif menu == "Daily Logs":
                     "task_id": None,
                     "description": reason
                 })
-                st.success("Logged")
+                st.success("Log saved")
         st.stop()
 
     task_map = {t["title"]: t["_id"] for t in my_tasks}
@@ -257,7 +237,7 @@ elif menu == "Daily Logs":
 
     if st.button("Submit Task Log"):
         if not desc.strip():
-            st.error("Description mandatory")
+            st.error("Description is mandatory")
         else:
             task_logs_col.update_one(
                 {"user": user["email"], "date": log_date},
@@ -278,10 +258,7 @@ elif menu == "Leave":
     st.title("🌴 Leave")
 
     if not is_nc:
-        bal = users_col.find_one({"email": user["email"]})["leave_balance"]
-        st.json(bal)
-
-        ltype = st.selectbox("Leave Type *", list(bal.keys()))
+        ltype = st.selectbox("Leave Type *", LEAVE_TYPES)
         ldate = st.date_input("Leave Date *")
         reason = st.text_area("Reason *")
 
@@ -297,6 +274,7 @@ elif menu == "Leave":
                 st.success("Leave applied")
 
     else:
+        st.subheader("Approve Leaves")
         for l in leave_col.find({"status": "Pending"}):
             with st.expander(f"{l['user']} | {l['type']} | {l['date']}"):
                 st.write(l["reason"])
@@ -305,8 +283,11 @@ elif menu == "Leave":
                         {"_id": l["_id"]},
                         {"$set": {"status": "Approved"}}
                     )
-                    users_col.update_one(
-                        {"email": l["user"]},
-                        {"$inc": {f"leave_balance.{l['type']}": -1}}
-                    )
                     st.success("Approved")
+
+# =====================================================
+# LOGOUT
+# =====================================================
+elif menu == "Logout":
+    st.session_state.user = None
+    st.experimental_rerun()
